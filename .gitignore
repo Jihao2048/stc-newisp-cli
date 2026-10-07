@@ -1,0 +1,66 @@
+# Build directories. The tool is plain CMake, so out-of-source builds are the
+# norm; these names cover the common conventions.
+build/
+build-*/
+out/
+cmake-build-*/
+
+# Visual Studio drops these next to the sources when a solution is opened.
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.user
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# vcpkg manifest mode installs the dependency tree here.
+vcpkg_installed/
+
+# Python bytecode from the test scripts.
+__pycache__/
+*.pyc
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Compiled binaries and objects
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.pdb
+*.ilk
+
+# ---------------------------------------------------------------------------
+#  One-off diagnostic scripts
+# ---------------------------------------------------------------------------
+# These were written while bringing the port up on each platform and are kept
+# in the working tree for future troubleshooting, but they are not part of the
+# project: they hardcode paths from the machine they were used on and would rot
+# in the repository. Add them back deliberately if one turns out to be worth
+# keeping.
+
+# Serial/HID transport debugging.
+scripts/wsl-usb-diag.sh
+scripts/wsl-hidbackend.sh
+scripts/wsl-cppprobe.sh
+scripts/wsl-hidprobe.sh
+tests/hid_cpp_probe.cpp
+tests/hid_probe.py
+
+# A partial 8051 disassembler, written to inspect one test image.
+tests/disasm8051.py
+
+# Per-machine helpers that only make sense on the author's setup.
+scripts/wsl-artifacts.sh
