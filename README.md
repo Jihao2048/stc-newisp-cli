@@ -1,10 +1,13 @@
-﻿# newisp
+# newisp
 
 A cross-platform command-line programmer (flasher) for **STC 8051-family microcontrollers**.
 
 `newisp` was ported from a Windows-only WinUI 3 / C++/WinRT desktop application to a portable
 C++17 CLI built with CMake. It runs on Windows, macOS and Linux, and speaks to a target chip over
 either a serial (UART) link or the factory USB HID ISP interface.
+
+> **中文文档**：见 [README.zh-CN.md](README.zh-CN.md)。 / Chinese documentation:
+> see [README.zh-CN.md](README.zh-CN.md).
 
 ## Table of contents
 
@@ -115,13 +118,53 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 > absent. Pass the board through with `usbipd-win` (`usbipd list`, then `usbipd attach --wsl`) if you
 > want to burn from WSL itself.
 
-### macOS (Homebrew)
+### macOS
+
+With Homebrew, on Apple silicon:
 
 ```sh
 brew install cmake hidapi
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
+
+**Homebrew no longer supports Intel Macs.** Version 7.0.0 moved them to "Tier 3"
+and the install script now refuses to run on anything that is not Apple silicon,
+so an Intel machine needs the two dependencies built by hand. This is the route
+that was used to verify the macOS port in this repository:
+
+```sh
+# 1. CMake. macOS ships python3, so pip can supply it.
+python3 -m pip install --user cmake
+echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+cmake --version
+
+# 2. hidapi, built from source against IOKit.
+cd ~
+curl -L -o hidapi.tar.gz \
+  https://github.com/libusb/hidapi/archive/refs/tags/hidapi-0.14.0.tar.gz
+tar xzf hidapi.tar.gz
+cd hidapi-hidapi-0.14.0
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j4
+sudo cmake --install build
+
+# 3. newisp.
+cd ~/newisp-cross
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4
+```
+
+`CMAKE_POLICY_VERSION_MINIMUM=3.5` is needed because hidapi 0.14.0 asks for a
+CMake older than 3.5 and CMake 4.x refuses those projects outright.
+
+Serial ports on macOS are `/dev/cu.*`. Prefer `cu` over `tty`: opening a `tty`
+waits for DCD, which a self-powered board never asserts, so the open hangs.
+
+There is also `docs/macos-build.md`, which is a longer walkthrough of the same
+steps including the Command Line Tools install.
 
 ### Windows
 
@@ -356,10 +399,20 @@ What has actually been exercised for this port, so the state of the code is not 
 | --- | --- | --- | --- | --- |
 | Linux (Ubuntu 22.04, GCC 11, CMake 3.22) | yes | yes, all passing | yes | yes, full burn sequence passes against the PTY fake chip |
 | Windows (MSVC 19.44, CMake 4.4) | yes | not run | yes; device enumeration finds real ports and HID devices | **yes, against an AI8051U34K64 over USB HID** |
-| macOS | not built here | — | — | — |
+| macOS 13.1 (AppleClang 14, CMake 4.4) | yes | not run | yes; IOKit serial scan and hidapi enumeration both answer | **yes, against an AI8051U34K64 over USB HID** |
 
 The Windows HID enumeration was checked against the machine's actual HID devices: 17 were found and
 their product strings and vendor/product IDs decoded correctly.
+
+The macOS build was done in a VM with the dependencies built from source (Homebrew no longer
+installs on Intel Macs). Its serial list came back empty, which is correct for a VM with no serial
+hardware, and the HID enumeration found the board:
+
+```
+未发现串口设备
+STC ISP 设备 (VID 34BF PID 1001): 1 个
+  USB-ISP [34BF:1001] (DevSrvsID:4294968331)
+```
 
 ### Hardware burn test (AI8051U34K64 over USB HID)
 
@@ -383,11 +436,40 @@ reports the new clock.
 | Target | `opts[24..26]` count | trim written | Re-probed clock |
 | --- | --- | --- | --- |
 | 24 MHz | `0x016E36` | `48 20 01` | 24.000 MHz |
+| 40 MHz | `0x02625A` | `73 30 01` | — |
 | 45 MHz | `0x02AEA5` | `A6 30 01` | 44.999 MHz |
 
 The 44.999 MHz reading is normal IRC tolerance, and the vendor ISP tool reports the same value for
 the same option bytes. The written option block was verified byte for byte against the constants in
 `protocol_stc8_hid.h`, including the frequency count, the reference-voltage trim and the trim triple.
+
+The same 45 MHz burn was then repeated unchanged on Windows, Linux (through usbipd into WSL) and
+macOS. All three read back the identical chip UID `78 B4 C9 28 09 FA 88`, which is the strongest
+evidence that the protocol implementation matches across platforms.
+
+### The serial path on real hardware
+
+An STC8H8K64U was programmed over serial at 460800 baud. The calibration handshake ran for real:
+the tool measured the IRC, derived `trim_adj=67, trim_range=0x20, trim_divider=1` and switched the
+host to 460800, after which all 265 blocks of a 16920-byte image were written and the option block
+was accepted.
+
+### A cross-platform bug that only hardware could expose
+
+The port had a genuine bug that no amount of compiling or unit testing would have caught, because
+it only appears when the same code talks to a real device through two different HID stacks:
+
+| Platform | First byte returned by `hid_read` |
+| --- | --- |
+| Windows (`hid.dll`) | a **report ID** -- the HID stack reserves the first byte, so the payload starts at index 1 |
+| Linux (`hidraw`) | **payload** -- the kernel hands over the report body only, so it starts at index 0 |
+
+Skipping the first byte unconditionally shifted every packet by one on Linux, so the `46 B9` frame
+marker never landed where the parser expected it and every probe reported "no chip detected".
+
+The fix does not encode an assumption about the backend. It looks at the data: an STC packet always
+begins with `46 B9`, so whichever index holds that marker is where the payload starts. That works on
+all three platforms and tolerates a future change in hidapi's behaviour.
 
 ## Limitations
 
@@ -396,16 +478,14 @@ the same option bytes. The written option block was verified byte for byte again
   families are covered by the unit tests rather than end to end.
 - The PTY test is Linux/macOS only, because it needs a real terminal device pair. There is no
   equivalent on Windows, where the serial backend is a different API entirely.
-- Only the **HID transport** has been exercised against real silicon. The serial transport has not
-  been used with a physical adapter from this repository, so its Win32 and termios backends are
-  verified by the PTY test and by inspection rather than by a real burn.
-- macOS has been built for but not run: the sources are portable and the platform code follows the
-  documented IOKit and termios interfaces, but no macOS machine was available to compile or execute
-  it. Treat the macOS path as untested.
-- WSL2 does not expose USB devices to `/dev/bus/usb` by default, so the Linux build was verified by
-  compilation, unit tests and the PTY protocol test rather than against the board. Passing a device
-  through with `usbipd-win` would allow a real Linux burn.
+- Serial burning has been exercised on Windows (COM13, STC8H8K64U, 460800 baud) and inside WSL
+  through usbipd, but not on a physical Linux host with a real adapter.
+- The macOS unit tests have not been run yet. The build and a real burn both succeeded there.
+- The binaries are not "double-click and go". They are command-line tools with no Apple developer
+  signature; handing one to someone else requires clearing the quarantine attribute
+  (`xattr -d com.apple.quarantine newisp`) and keeping the executable bit, and an Intel binary needs
+  Rosetta 2 on Apple silicon.
 
 ## License
 
-See the repository for license information.
+This project is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
