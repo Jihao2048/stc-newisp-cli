@@ -38,8 +38,10 @@ either a serial (UART) link or the factory USB HID ISP interface.
 - Automatic chip identification by magic (chip ID) lookup against a table of roughly 1300 parts.
 - Full burn sequence: erase, 64-byte block writes, and option-byte programming.
 - Intel HEX image parsing.
-- Frequency, baud rate and overclock handling with human-friendly argument forms
+- Frequency and baud rate handling with human-friendly argument forms
   (`115.2k`, `24M`, `11.0592M`, ...).
+- Measured IRC calibration on the serial transport: the tool derives the trim
+  triple from the chip's real frequency rather than looking it up.
 
 ## Supported chip families
 
@@ -51,10 +53,17 @@ either a serial (UART) link or the factory USB HID ISP interface.
 | STC8 / STC8A / STC8C / STC8F / STC8G / STC8H | Serial and USB HID |
 | STC16 | Serial and USB HID |
 | STC32 | Serial and USB HID |
-| STC8051U / AI8051U | USB HID only (see below) |
+| STC8051U / AI8051U | Serial and USB HID |
 
-The **8051U** family has **no serial ISP monitor at all**. It can only be programmed over USB HID.
-The tool detects this case and reports it explicitly instead of failing with an obscure error.
+The **8051U** family is documented by the vendor as USB-HID-only, and the tool
+used to refuse it on the serial transport for that reason. The rule turned out
+to be wrong: on an AI8051U34K64 with BSL 7.4U the serial ISP monitor answers the
+wakeup and a full burn succeeds. The refusal has been removed, so what decides
+is the probe -- a part that answers is programmable.
+
+The selectable IRC range stops at **45 MHz**, the vendor's validated ceiling.
+There is no overclock option: the frequencies above it were either measured to
+misbehave or extrapolated from unverified points.
 
 ## Transports
 
@@ -220,8 +229,7 @@ newisp burn -f FILE [options] [device]   erase, write and set options
 | `-d`, `--device NAME` | Device to open: `COM7`, `/dev/ttyUSB0`, `/dev/cu.usbserial-*`, or a HID interface path. If omitted and exactly one candidate exists, it is used; if several exist, the tool refuses and lists them. |
 | `-f`, `--file FILE` | Intel HEX image (required for `burn`) |
 | `-b`, `--baud RATE` | Baud rate, default `115200`. Accepts forms such as `115200`, `115.2k`, `1M` |
-| `-F`, `--freq HZ` | Target IRC frequency, default 24 MHz. Accepts forms such as `24000000`, `24M`, `11.0592M` |
-| `-O`, `--overclock` | Use the 46–50 MHz overclock band (defaults to 47 MHz if no `-F` is given) |
+| `-F`, `--freq HZ` | Target IRC frequency, default 24 MHz. Accepts forms such as `24000000`, `24M`, `11.0592M`. The maximum is 45 MHz; anything above is rejected |
 | `-e`, `--eeprom SIZE` | EEPROM split, e.g. `4K`. `0` keeps the chip's current setting |
 | `--clock internal\|external` | Clock source for the STC89/12/15 option bytes |
 | `--family NAME` | Fallback family to use when probing identifies nothing |
@@ -260,12 +268,6 @@ Burn with an explicit baud rate, frequency and EEPROM split:
 
 ```sh
 newisp burn -f firmware.hex -b 115.2k -F 24M -e 4K -d /dev/cu.usbserial-1420
-```
-
-Use the overclock band (defaults to 47 MHz):
-
-```sh
-newisp burn -f firmware.hex --overclock -d COM7
 ```
 
 Force a family when identification fails, with the external clock source:
@@ -325,7 +327,7 @@ include/newisp/
   protocol_stc8_hid.h   STC32/STC8G/STC8 over USB HID
   protocol_factory.h    chip name -> protocol
   chip_table.h          chip ID (magic) -> part name, ~1300 entries
-  chip_logic.h          family predicates, frequency/baud/overclock tables
+  chip_logic.h          family predicates, frequency and baud tables
   hex_file.h            Intel HEX parser
   session.h             detect/burn sequences
   options.h             CLI options
@@ -369,11 +371,21 @@ than claiming success. The older STC families run at 8N1 anyway.
 
 ## Hardware notes
 
-### Overclock
+### Clock range
 
-46 and 47 MHz were measured to work on an AI8051U34K64; 48 MHz falls back to a much lower clock, so
-the physical IRC limit sits just under 48 MHz. The 49/50 MHz entries are extrapolated and
-unreliable. The STC8G family tops out near 35 MHz, and overclock is refused for it.
+The selectable IRC range stops at **45 MHz**, the vendor's validated ceiling. There is no overclock
+option, because the frequencies above it were never on solid ground:
+
+- 46 and 47 MHz were measured to work on an AI8051U34K64
+- **48 MHz was measured to drop the clock** rather than raise it, so the physical IRC limit sits
+  just under 48 MHz
+- 49 and 50 MHz were extrapolated from a fitted curve, not measured
+
+A target the chip cannot reach is worse than a missing option: the program runs at an unknown speed
+and the only symptom is timing that is subtly wrong. A `-F` above 45 MHz is therefore rejected with
+an explanation rather than silently clamped.
+
+The STC8G and STC15 families top out at 35 MHz; a request above that is brought down with a note.
 
 ### Option bytes
 
@@ -395,11 +407,11 @@ does not support it is ignored.
 
 What has actually been exercised for this port, so the state of the code is not overstated:
 
-| Platform | Build | Unit tests | Smoke test | Protocol test |
+| Platform | Build | Unit tests | Smoke test | Real hardware |
 | --- | --- | --- | --- | --- |
-| Linux (Ubuntu 22.04, GCC 11, CMake 3.22) | yes | yes, all passing | yes | yes, full burn sequence passes against the PTY fake chip |
-| Windows (MSVC 19.44, CMake 4.4) | yes | not run | yes; device enumeration finds real ports and HID devices | **yes, against an AI8051U34K64 over USB HID** |
-| macOS 13.1 (AppleClang 14, CMake 4.4) | yes | not run | yes; IOKit serial scan and hidapi enumeration both answer | **yes, against an AI8051U34K64 over USB HID** |
+| Linux (Ubuntu 22.04, GCC 11, CMake 3.22) | yes | yes, all passing | yes | PTY protocol test passes; AI8051U34K64 burned over USB HID at 45 MHz |
+| Windows (MSVC 19.44, CMake 4.4) | yes | not run | yes; device enumeration finds real ports and HID devices | AI8051U34K64 burned over USB HID at 24/40/45 MHz **and over serial**; STC8H8K64U over serial at 460800 baud |
+| macOS 13.1 (AppleClang 14, CMake 4.4) | yes | not run | yes; IOKit serial scan and hidapi enumeration both answer | AI8051U34K64 burned over USB HID at 45 MHz |
 
 The Windows HID enumeration was checked against the machine's actual HID devices: 17 were found and
 their product strings and vendor/product IDs decoded correctly.
@@ -453,6 +465,37 @@ An STC8H8K64U was programmed over serial at 460800 baud. The calibration handsha
 the tool measured the IRC, derived `trim_adj=67, trim_range=0x20, trim_divider=1` and switched the
 host to 460800, after which all 265 blocks of a 16920-byte image were written and the option block
 was accepted.
+
+### The 8051U does have a serial ISP monitor
+
+The vendor documentation lists the 8051U family as programmable over USB HID only, and the tool
+originally enforced that: a serial probe that identified an 8051U was refused with a message
+telling the user to switch transport.
+
+That rule was inherited rather than measured, and it is wrong. On an AI8051U34K64 with BSL 7.4U the
+serial monitor answers the `0x7F` wakeup with a `0x50`-prefixed status packet, the calibration
+handshake completes, and the whole sequence runs:
+
+```
+[1/7] 握手成功
+[2/7] 已切到 115200，trim_adj=90, trim_range=0x20, trim_freq=24031200 Hz
+[3/7] 准备编程成功
+[4/7] 擦除成功 → UID 78 B4 C9 28 09 FA 88
+[5/7] 13/13 块
+[6/7] 选项写入成功
+[7/7] 烧录完成！
+```
+
+Reading the chip back afterwards confirms the option block took effect: the status packet reports
+24.031 MHz with the trim triple that was just written.
+
+The refusal has been removed. What decides is the probe: a part that answers is programmable,
+whatever the manual says about that transport. A part that does not answer fails on its own timeout
+and nothing after that runs.
+
+Note that the serial and HID status packets are not laid out identically -- the serial one carries a
+`0x50` prefix and reports different MSR bytes -- which is why the two transports had separate
+protocol implementations all along.
 
 ### A cross-platform bug that only hardware could expose
 
