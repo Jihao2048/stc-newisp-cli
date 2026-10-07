@@ -62,5 +62,9 @@ tests/hid_probe.py
 # A partial 8051 disassembler, written to inspect one test image.
 tests/disasm8051.py
 
+# Probed the parameter shapes of the STC manual MCP service by hand; the useful
+# client is tests/stc_mcp.py, which is kept.
+tests/stc_mcp_probe.py
+
 # Per-machine helpers that only make sense on the author's setup.
 scripts/wsl-artifacts.sh

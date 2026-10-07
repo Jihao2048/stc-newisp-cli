@@ -60,12 +60,14 @@ namespace newisp {
             return -1;
         }
 
-        // The overclock band is 46..50 MHz; anything in it needs the special
-        // trim table rather than the vendor-validated one.
-        bool IsOverclockFreq(uint32_t freq)
+        // Frequencies above the vendor's validated ceiling are no longer
+        // reachable from the command line; see the note where the overclock
+        // table used to live in chip_logic.h. Anything above 45 MHz is still
+        // rejected explicitly so a stale command line fails loudly instead of
+        // being silently clamped.
+        bool IsAboveValidatedRange(uint32_t freq)
         {
-            return freq >= (uint32_t)kOverclockMinMHz * 1000000u &&
-                   freq <= (uint32_t)kOverclockMaxMHz * 1000000u;
+            return freq > kFreqTable[kNumFreq - 1];
         }
 
     } // namespace
@@ -126,14 +128,17 @@ namespace newisp {
             "  -b, --baud RATE           serial baud rate (default 115200)\n"
             "                            accepts 115200, 115.2k, 1M\n"
             "  -F, --freq HZ             target IRC frequency (default 24 MHz)\n"
-            "                            accepts 24000000, 24M, 11.0592M\n"
-            "  -O, --overclock           use the 46-50 MHz overclock band\n"
+            "                            accepts 24000000, 24M, 11.0592M;\n"
+            "                            the maximum is 45 MHz\n"
             "  -e, --eeprom SIZE         EEPROM split, e.g. 4K (0 = keep chip setting)\n"
             "      --clock internal|external\n"
             "                            clock source for STC89/12/15 option bytes\n"
             "      --family NAME         fallback family when probing identifies\n"
             "                            nothing: stc89, stc12, stc15, stc8g,\n"
             "                            stc32, stc8\n"
+            "      --force-serial        try serial even for a part the manual\n"
+            "                            calls HID-only (8051U). The probe\n"
+            "                            decides whether it works\n"
             "\n"
             "Output:\n"
             "  -q, --quiet               only errors and the final summary\n"
@@ -261,9 +266,6 @@ namespace newisp {
                     return 2;
                 }
             }
-            else if (a == "-O" || a == "--overclock") {
-                out.overclock = true;
-            }
             else if (a == "-e" || a == "--eeprom") {
                 const char* v = needValue("--eeprom");
                 if (!v) return 2;
@@ -299,6 +301,12 @@ namespace newisp {
                 }
                 out.burn.protoOverride = idx;
             }
+            else if (a == "--force-serial") {
+                // Allow a chip that the documentation marks as HID-only to be
+                // driven over serial anyway. The probe decides: if the chip
+                // answers, the transfer can proceed.
+                out.burn.allowHidOnlySerial = true;
+            }
             else if (!a.empty() && a[0] == '-') {
                 error = "unknown option: " + a;
                 return 2;
@@ -322,19 +330,18 @@ namespace newisp {
             return 2;
         }
 
-        if (out.overclock) {
-            // The overclock flag means "use the band", but the band has five
-            // entries. If no explicit frequency was given, pick the highest
-            // verified one rather than the top of the extrapolated range.
-            bool freqGiven = false;
-            for (int k = 2; k < argc; ++k) {
-                std::string t = argv[k];
-                if (t == "-F" || t == "--freq") { freqGiven = true; break; }
-            }
-            if (!freqGiven) out.burn.targetFreq = 47000000;
+        // The overclock band is gone, so a frequency above the vendor's ceiling
+        // is a mistake worth reporting rather than a request to be honoured or
+        // quietly clamped. Silence here would leave the user believing they had
+        // asked for something the tool never attempted.
+        if (out.burn.targetFreq && IsAboveValidatedRange(out.burn.targetFreq)) {
+            error = "target frequency " + std::to_string(out.burn.targetFreq) +
+                " Hz is above the validated maximum (" +
+                std::to_string(kFreqTable[kNumFreq - 1] / 1000000) +
+                " MHz) and the overclock band has been removed";
+            return 2;
         }
 
-        out.burn.overclock = IsOverclockFreq(out.burn.targetFreq);
         out.burn.clockExternal = out.clockExternal;
         out.burn.useHid = out.useHid;
 

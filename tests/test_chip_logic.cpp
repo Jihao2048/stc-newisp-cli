@@ -37,21 +37,23 @@ namespace {
 
     void TestHidOnlyDetection()
     {
-        // The 8051U family has no serial ISP monitor, so a serial attempt must
-        // be reported as "wrong transport" rather than "unsupported chip".
+        // The predicate still recognises the family so the tool can mention it,
+        // but it no longer gates anything.
         CHECK(IsHidOnlyChip("STC8051U34K64"));
         CHECK(IsHidOnlyChip("AI8051U34K64"));
         CHECK(!IsHidOnlyChip("STC8H3K60S4"));
         CHECK(!IsHidOnlyChip("STC32G12K128"));
 
-        // Over serial the restriction applies; over HID it does not, because
-        // the part only ever appears there when it is a valid target.
-        CHECK(IsUnsupportedForTransport("AI8051U34K64", false));
+        // No chip is refused on transport grounds any more.
+        //
+        // The rule that used to reject an 8051U over serial was inherited from
+        // the vendor material and never measured. Measured on an AI8051U34K64
+        // with BSL 7.4U, the serial monitor answers the 0x7F wakeup with a
+        // 0x50-prefixed status packet and a full erase/program/option cycle
+        // succeeds, so the refusal was wrong. The probe decides now.
+        CHECK(!IsUnsupportedForTransport("AI8051U34K64", false));
         CHECK(!IsUnsupportedForTransport("AI8051U34K64", true));
         CHECK(!IsUnsupportedForTransport("STC8H3K60S4", false));
-
-        // An unresolved name must not be reported as unsupported: the tool does
-        // not know what the chip is, which is a different message.
         CHECK(!IsUnsupportedForTransport("", false));
     }
 

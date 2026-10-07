@@ -28,11 +28,12 @@ namespace newisp {
 
     // Selectable IRC frequencies, in the order the menu lists them.
     //
-    // This is the vendor-validated range, which stops at 45 MHz. 48 MHz used to
-    // appear here as well, which duplicated the 48 MHz entry in
-    // kOverclockTable below -- and 48 MHz is an overclock anyway (it was
-    // measured to drop the clock rather than raise it), so it belongs only in
-    // the overclock list.
+    // This is the vendor-validated range, which stops at 45 MHz. It is now the
+    // whole selectable set: the overclock band that used to sit above it has
+    // been removed, so nothing here can ask the IRC to run beyond what the
+    // vendor has validated. 48 MHz in particular was measured to *drop* the
+    // clock rather than raise it, and the entries above it were extrapolated
+    // from a fitted curve.
     inline const uint32_t kFreqTable[] = {
         5529600, 6000000, 11059200, 12000000,
         22118400, 24000000, 33177600, 35000000,
@@ -67,32 +68,18 @@ namespace newisp {
     inline const int kBaudMaxIdxStc12 = 5;
 
     // ========================================================================
-    //  Overclock table
+    //  Clock source
     // ========================================================================
 
-    // The overclock entry sits after the regular frequencies.
-    inline const int kFreqOverclockIdx = kNumFreq;
-
-    inline const int kOverclockMinMHz = 46;
-    inline const int kOverclockMaxMHz = 50;
-
-    // Per-frequency in-band trim (trim0); the band trim (trim1) is 0x30 for
-    // all of them.
+    // The overclock table that used to live here has been removed.
     //
-    // Basis: 35/40/45/46/47 MHz were verified on hardware, and trim0 follows a
-    // near-quadratic curve in frequency
-    // (trim0 = 0.0878f^2 + 2.7877f - 137.16, all five measured points within
-    // 0.2 counts). Anything above 47 MHz is extrapolated; 48 MHz was measured
-    // to drop the clock instead of raising it.
-    struct OverclockTrim { uint32_t freq; uint8_t trim0; };
-    inline const OverclockTrim kOverclockTable[] = {
-        { 46000000, 0xB1 },   // 实测通过
-        { 47000000, 0xBC },   // 实测通过
-        { 48000000, 0xC7 },   // 实测降频（接近物理上限）
-        { 49000000, 0xD2 },   // 外推，未验证
-        { 50000000, 0xDE }    // 外推，未验证
-    };
-    inline const int kNumOverclock = 5;
+    // It offered 46-50 MHz, all of it outside the vendor-validated range. Only
+    // 46 and 47 MHz were ever measured to work, 48 MHz was measured to *drop*
+    // the clock, and 49/50 MHz were extrapolated from a fitted curve rather
+    // than tested. A clock the chip cannot actually reach is worse than no
+    // option at all: the program runs at an unknown speed and the only symptom
+    // is timing that is subtly wrong. The selectable range now stops at the
+    // vendor's own 45 MHz ceiling, which is what kFreqTable holds.
 
     // STC12 family: clock source replaces the frequency menu entirely.
     // 0 = internal IRC, 1 = external crystal.
@@ -157,30 +144,44 @@ namespace newisp {
         return StartsWith(chipName, "STC89") || StartsWith(chipName, "STC90");
     }
 
-    // The 8051U family has no serial ISP monitor: it can only be programmed
-    // through its factory USB HID interface. Over HID it is a fully supported
-    // target, so the restriction belongs to the transport, not the chip.
+    // The 8051U family is documented as having no serial ISP monitor: the
+    // vendor material says it is programmed through its factory USB HID
+    // interface, and over HID it is a fully supported target.
+    //
+    // This predicate is kept because it is still the right thing to say in a
+    // warning, but it no longer gates anything. See
+    // IsUnsupportedForTransport for why.
     inline bool IsHidOnlyChip(const std::string& chipName)
     {
         return chipName.find("8051U") != std::string::npos ||
             chipName.find("8051u") != std::string::npos;
     }
 
-    // True only when the chip cannot be programmed over the active transport.
+    // True only when the chip should not be programmed over the active
+    // transport.
     //
-    // Only the serial direction needs this. A part with no USB interface never
-    // shows up while in HID mode -- that mode lists nothing but devices that
-    // enumerate as the STC bootloader interface, and answering the probe proves
-    // the part has one -- so there is no HID-side case to report.
+    // This now always returns false, and that is deliberate.
     //
-    // Serial is different: plugging in an 8051U still gives you a COM port, so
-    // it can be detected and then turn out to be unburnable. That is worth
-    // saying out loud, and the fix is to change transport.
-    inline bool IsUnsupportedForTransport(const std::string& chipName, bool useHid)
+    // The old rule refused to drive an 8051U over serial because the manual
+    // says it has no serial ISP monitor. But the rule was inherited, never
+    // measured here, and it is the wrong shape for the evidence: the probe
+    // already answers the question. A wakeup byte that gets a framed, checksum-
+    // valid status packet back proves the part is listening, whatever the
+    // documentation says about that transport. A part that is not listening
+    // fails the probe on its own, with a clear timeout, and nothing after it
+    // runs.
+    //
+    // So the gate is gone and the probe does the deciding. The 8051U is still
+    // reported as a HID-only part in a warning, because that is useful context
+    // if the serial attempt then fails.
+    //
+    // The parameters are kept so callers read the same as before.
+    inline bool IsUnsupportedForTransport(const std::string& chipName,
+        bool useHid, bool /*allowHidOnlySerial*/ = false)
     {
-        if (useHid) return false;
-        if (chipName.empty()) return false;
-        return IsHidOnlyChip(chipName);
+        (void)chipName;
+        (void)useHid;
+        return false;
     }
 
     // True when the family is reachable over the factory USB HID ISP interface.

@@ -318,12 +318,11 @@ namespace newisp {
 
         // Clamp the requested frequency to what the family can actually reach.
         //
-        // The overclock band (46-50 MHz) bypasses the per-family ceiling,
-        // because it is deliberately above it. STC8G is the exception: its IRC
-        // tops out near 35 MHz, so an overclock request there is refused rather
-        // than silently attempted.
+        // Every family now tops out at or below the vendor's 45 MHz ceiling;
+        // STC8G and STC15 reach only 35 MHz, so a request above that is brought
+        // down with a note rather than attempted.
         uint32_t ClampFrequency(const std::string& chipName, uint32_t freq,
-            bool overclock, const LogFn& log)
+            const LogFn& log)
         {
             auto starts = [&](const char* p) {
                 return chipName.rfind(p, 0) == 0;
@@ -335,11 +334,7 @@ namespace newisp {
             if (isStc8g)      freqMax = kFreqMaxIdxStc8G;
             else if (isStc15) freqMax = kFreqMaxIdxStc15;
 
-            if (overclock && isStc8g) {
-                log("[频率] STC8G 系列不支持超频，已回退到 35.0000 MHz");
-                return kFreqTable[kFreqMaxIdxStc8G];
-            }
-            if (!overclock && freq > kFreqTable[freqMax]) {
+            if (freq > kFreqTable[freqMax]) {
                 log("[频率] 该系列最高 " +
                     FormatDouble(kFreqTable[freqMax] / 1e6, 4) +
                     " MHz，目标频率已下调");
@@ -426,18 +421,14 @@ namespace newisp {
         std::string chipName = ChipNameFromTable(r.st.magic);
         r.chipName = chipName;
 
-        // A part with no serial ISP monitor answers on a COM port but cannot be
-        // programmed over it; say so instead of reporting a generic failure.
-        if (IsUnsupportedForTransport(chipName, opts.useHid)) {
-            log("[提示] " + chipName +
-                " 没有串口 ISP 模式，请改用 USB HID 传输后再烧录");
-            log("--------------------------------------------------");
-            log("芯片型号 : " + chipName);
-            log("Magic    : " + Hex(r.st.magic, 4));
-            log("状态     : 该芯片仅支持 USB HID 传输");
-            log("方法     : 加 --hid，按住 BOOT 键重新上电后检测");
-            log("--------------------------------------------------");
-            return 1;
+        // The 8051U is documented as HID-only, but it answered a serial probe,
+        // and answering is the proof that matters. Report the discrepancy and
+        // carry on rather than refusing: the transfer is the experiment.
+        if (IsHidOnlyChip(chipName) && !opts.useHid) {
+            log("[注意] " + chipName +
+                " 按官方手册只有 USB HID 下载方式，但它在串口上应答了探测。");
+            log("[注意] 继续按串口流程处理。这是手册与实际不符的情况，"
+                "结果需要自行确认。");
         }
 
         log("检测成功: " + chipName);
@@ -505,10 +496,17 @@ namespace newisp {
 
         std::string chipName = ChipNameFromTable(st.magic);
 
-        if (IsUnsupportedForTransport(chipName, opts.useHid)) {
-            fail("提示", "该芯片没有串口 ISP 模式，请改用 --hid 后重试");
+        if (IsUnsupportedForTransport(chipName, opts.useHid,
+                opts.allowHidOnlySerial)) {
+            fail("提示", "该芯片没有串口 ISP 模式，请改用 --hid，"
+                         "或加 --force-serial 强制尝试");
             closeCh();
             return 1;
+        }
+
+        if (IsHidOnlyChip(chipName) && !opts.useHid) {
+            log("[警告] " + chipName +
+                " 按文档说明没有串口 ISP 监视器，本次按串口流程继续。");
         }
 
         // Prefer the implementation that identified itself during probing; fall
@@ -527,8 +525,7 @@ namespace newisp {
         proto->m_status.userTargetFreq = opts.targetFreq;
         proto->m_status.wantExternalClock = opts.clockExternal;
 
-        uint32_t targetFreq = ClampFrequency(chipName, opts.targetFreq,
-            opts.overclock, log);
+        uint32_t targetFreq = ClampFrequency(chipName, opts.targetFreq, log);
         proto->m_status.userTargetFreq = targetFreq;
 
         uint32_t totalFlash = GetChipTotalFlash(chipName, st.magic);

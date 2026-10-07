@@ -26,7 +26,6 @@ namespace newisp {
         bool        transportExplicit = false;
 
         // Raw values as given, before any family clamping.
-        bool        overclock = false;
         bool        clockExternal = false;
         bool        clockExplicit = false;
 

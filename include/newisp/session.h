@@ -28,7 +28,6 @@ namespace newisp {
         uint32_t    baudRate = 115200;
         uint32_t    targetFreq = 24000000;   // IRC frequency to program
         bool        clockExternal = false;   // STC12-family clock source
-        bool        overclock = false;       // true when targetFreq is 46-50 MHz
         uint32_t    eepromBytes = 0;         // 0 = keep the chip's setting
 
         // Chip family selected on the command line, used only as a fallback
@@ -38,6 +37,16 @@ namespace newisp {
         // When false, the burn sequence probes for the chip first; when true it
         // uses protoOverride directly without a wakeup.
         bool        skipProbe = false;
+
+        // Proceed even for a part the documentation says has no serial ISP
+        // monitor (the 8051U family).
+        //
+        // The rule is inherited from the reference material rather than
+        // measured here, and the probe is the real test: a chip that answers
+        // the wakeup can be programmed whatever the manual claims. This flag
+        // turns an up-front refusal into a warning so that can be established
+        // on real hardware.
+        bool        allowHidOnlySerial = false;
     };
 
     // Result of a detect or the probe phase of a burn.
